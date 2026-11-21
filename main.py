@@ -1,4 +1,4 @@
-import os, warnings, math
+import io, os, warnings, math
 warnings.filterwarnings("ignore")
 
 import numpy as np
@@ -17,42 +17,91 @@ from sklearn.metrics import mean_absolute_error, r2_score
 # ─────────────────────────────────────────────────────────────
 # 0. 한글 폰트 설정 (그래프 한글 깨짐 완전 방지)
 # ─────────────────────────────────────────────────────────────
-# 이 환경에서는 NanumGothic 등 모든 한글 폰트가
-#   /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
-# 에 매핑되어 있음. TTC(TrueType Collection) 파일임.
-#
-# 폰트 처리 전략 (두 가지 동시 적용, 둘 중 하나만으로도 되도록):
-#  (A) rcParams["font.family"] = "NanumGothic"  ← matplotlib이 ttflist에서 찾음
-#  (B) FontProperties(fname=ttc_path)           ← 텍스트마다 강제 적용
-_KR_TTC_PATH  = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-_KR_FONT_FAMILY = "NanumGothic"
+# 상태: 실제 TTF 경로, rcParams용 family 이름, 재사용할 FontProperties
+_KR_FONT_FNAME  = None
+_KR_FONT_FAMILY = None
 _KR_FONT_FP     = None
 
 
 def _setup_korean_font():
-    global _KR_FONT_FP
-    # TTC 존재 확인
-    if not os.path.isfile(_KR_TTC_PATH):
-        # 대체: 시스템에 실제 Nanum TTF가 있으면 그걸 씀
-        for cand_path in [
-            "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-            "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    """matplotlib 그래프에서 한글 절대 깨지지 않게:
+       1) fm + 시스템 디렉터리에서 한글 TTF 탐색
+       2) try_read_cache=False로 매니저 리로드 → family 이름 정확히 확보
+       3) rcParams 고정 + FontProperties(fname=...) 객체 저장
+    """
+    global _KR_FONT_FNAME, _KR_FONT_FAMILY, _KR_FONT_FP
+
+    found_path  = None
+    found_entry = None
+
+    # (a) matplotlib ttflist에서 한글 계열 이름 찾기
+    for name in ["NanumGothic","NanumBarunGothic","NanumSquare",
+                 "Noto Sans CJK KR","Noto Sans Korean","Malgun Gothic",
+                 "AppleGothic","BaekmuGothic"]:
+        hits = [f for f in fm.fontManager.ttflist if f.name == name]
+        if hits:
+            found_path  = hits[0].fname
+            found_entry = hits[0]
+            break
+
+    # (b) 시스템 디렉터리 직접 탐색
+    if found_path is None:
+        for base in [
+            "/usr/share/fonts/truetype/nanum",
+            "/usr/share/fonts/opentype/nanum",
+            "/usr/share/fonts/truetype",
+            "/usr/share/fonts/opentype",
+            "/usr/share/fonts",
+            "/usr/local/share/fonts",
+            os.path.expanduser("~/.fonts"),
+            os.path.expanduser("~/.local/share/fonts"),
         ]:
-            if os.path.isfile(cand_path):
-                _KR_TTC_PATH = cand_path
+            if not os.path.isdir(base):
+                continue
+            try:
+                for root, _, files in os.walk(base):
+                    for fn in sorted(files):
+                        if not fn.lower().endswith((".ttf",".otf")):
+                            continue
+                        low = fn.lower()
+                        if any(k in low for k in ["nanum","noto","cjk","korean","gothic"]):
+                            found_path = os.path.join(root, fn)
+                            break
+                    if found_path:
+                        break
+            except Exception:
+                pass
+            if found_path:
                 break
-        # 그래도 없으면 fm 목록에서 아무 한글 폰트 fname 가져오기
-        if _KR_TTC_PATH == "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc":
-            for f in fm.fontManager.ttflist:
-                if any(k in (f.name or "").lower() for k in
-                       ["nanum","noto","cjk","korean","gothic"]):
-                    _KR_TTC_PATH = f.fname
-                    break
-    _KR_FONT_FP = FontProperties(fname=_KR_TTC_PATH)
-    plt.rcParams["font.family"]         = _KR_FONT_FAMILY
-    plt.rcParams["font.sans-serif"]     = [_KR_FONT_FAMILY]
+
+    # (c) 그래도 못 찾았으면 ttflist 전체 스캔
+    if found_path is None:
+        for f in fm.fontManager.ttflist:
+            low = (f.name or "").lower()
+            if any(k in low for k in ["nanum","noto","cjk","korean","gothic","malgun","apple"]):
+                found_path  = f.fname
+                found_entry = f
+                break
+
+    # (d) 찾았으면 리로드 + rcParams + FontProperties 생성
+    if found_path is not None:
+        _KR_FONT_FNAME = found_path
+        entry = FontEntry(fname=found_path, name=found_path)
+        fm._load_fontmanager(try_read_cache=False)
+        fm.fontManager.ttflist.insert(0, entry)
+        _KR_FONT_FAMILY = entry.name
+        plt.rcParams["font.family"]           = _KR_FONT_FAMILY
+        plt.rcParams["font.sans-serif"]       = [_KR_FONT_FAMILY]
+        plt.rcParams["axes.unicode_minus"]    = False
+        _KR_FONT_FP = FontProperties(fname=found_path)
+        return True
+
+    # (e) 못 찾으면 sans-serif 폴백 (마이너스 기호만 정상)
+    plt.rcParams["font.family"]         = "sans-serif"
     plt.rcParams["axes.unicode_minus"] = False
+    _KR_FONT_FAMILY = "sans-serif"
+    _KR_FONT_FP     = FontProperties()
+    return False
 
 
 _setup_korean_font()
@@ -63,14 +112,15 @@ _setup_korean_font()
 # ─────────────────────────────────────────────────────────────
 
 def _kp(size=10, weight="normal"):
-    """그래프 각 줄에 쓸 한글 FontProperties."""
-    return FontProperties(fname=_KR_TTC_PATH, size=size, weight=weight)
+    """그래프 한 줄마다 쓸 한글 FontProperties. 못 찾았으면 빈 객체(폴백)."""
+    if _KR_FONT_FP is not None:
+        return FontProperties(fname=_KR_FONT_FNAME, size=size, weight=weight)
+    return FontProperties(size=size, weight=weight)
 
 
 def _apply_font_all(fig):
     """그림 전체(제목·축·눈금·ax.text·suptitle)에 한글 폰트 강제 적용.
-    범례는 생성 시점에 prop=_kp() 로 설정했으므로 여기서도 시도하되
-    set_fontproperties가 없어도 Exception으로 안전하게 넘긴다."""
+    범례 객체에서 set_fontproperties가 없어도 Exception으로 안전하게 넘긴다."""
     fp = _kp()
     for ax in fig.get_axes():
         title = ax.get_title()
@@ -87,18 +137,10 @@ def _apply_font_all(fig):
     stp = fig._suptitle
     if stp is not None:
         stp.set_fontproperties(fp)
+    # 범례: get_legend() 결과가 None이거나 set_fontproperties가 없는 경우 대비
     for ax in fig.get_axes():
         leg = ax.get_legend()
         if leg is not None:
-            try:
-                leg.set_fontproperties(fp)
-            except Exception:
-                pass
-        # figure-level legend (fig.legend) 처리
-    # fig.legend()는 axes가 아니라 figure에 붙으므로 별도 처리
-    leg_fig = fig.legends
-    if leg_fig:
-        for leg in leg_fig:
             try:
                 leg.set_fontproperties(fp)
             except Exception:
@@ -397,9 +439,9 @@ def analyze_growth(df):
         else:
             g[f"t_{k}"]=np.nan; g[f"p_{k}"]=np.nan
 
-    st_=data["shoot"].loc[top_idx]; rt_=data["root"].loc[top_idx]
-    sb_=data["shoot"].loc[bot_idx]; rb_=data["root"].loc[bot_idx]
-    rT=(st_/rt_).dropna(); rB=(sb_/rb_).dropna()
+    st=data["shoot"].loc[top_idx]; rt=data["root"].loc[top_idx]
+    sb=data["shoot"].loc[bot_idx]; rb=data["root"].loc[bot_idx]
+    rT=(st/rt).dropna(); rB=(sb/rb).dropna()
     g["top_ratio_mean"]=float(rT.mean()) if len(rT)>0 else np.nan
     g["bot_ratio_mean"]=float(rB.mean()) if len(rB)>0 else np.nan
     if len(rT)>=2 and len(rB)>=2:
@@ -493,8 +535,7 @@ def draw_env_timeseries(env_result, env_df):
     ax2.set_ylim(30,80)
     ax1.set_title("날짜별 평균 온도·습도 시계열 (127일)")
     ax1.grid(True, alpha=0.3); fig.autofmt_xdate()
-    fig.legend(loc="upper right", bbox_to_anchor=(0.89,0.92), fontsize=9,
-               prop=_kp())
+    fig.legend(loc="upper right", bbox_to_anchor=(0.89,0.92), fontsize=9)
     plt.tight_layout(); _apply_font_all(fig); st.pyplot(fig); plt.close(fig)
 
 
@@ -524,7 +565,7 @@ def draw_hourly_chart(env_result):
     ax2.axvline(x=env_result["hourly_humi_max_h"],  color=C_HUMI, ls="--", alpha=0.5)
     ax2.axvline(x=env_result["hourly_humi_min_h"], color=C_HUMI, ls=":",  alpha=0.5)
     ax1.grid(axis="y", alpha=0.3)
-    fig.legend(loc="upper right", bbox_to_anchor=(0.89,0.92), fontsize=9, prop=_kp())
+    fig.legend(loc="upper right", bbox_to_anchor=(0.89,0.92), fontsize=9)
     plt.tight_layout(); _apply_font_all(fig); st.pyplot(fig); plt.close(fig)
 
 
@@ -538,17 +579,17 @@ def draw_ec_ph_trend(env_result, env_df):
     ax2=ax1.twinx()
     ax2.plot(df["time_dt"], df["ph"], color=C_PH, lw=1.2, alpha=0.7, label="pH")
     ax2.set_ylabel("pH", color=C_PH); ax2.tick_params(axis="y", labelcolor=C_PH)
-    ee=env_result.get("early_ec_mean"); el_=env_result.get("late_ec_mean")
-    pe=env_result.get("early_ph_mean"); pl_=env_result.get("late_ph_mean")
-    if not np.isnan(ee) and not np.isnan(el_):
+    ee=env_result.get("early_ec_mean"); el=env_result.get("late_ec_mean")
+    pe=env_result.get("early_ph_mean"); pl=env_result.get("late_ph_mean")
+    if not np.isnan(ee) and not np.isnan(el):
         ax1.axhline(y=ee, color=C_EC, ls="--", alpha=0.5, label=f"6월 초 EC={ee:.2f}")
-        ax1.axhline(y=el_, color=C_EC, ls=":",  alpha=0.5, label=f"8월 하순 EC={el_:.2f}")
-    if not np.isnan(pe) and not np.isnan(pl_):
+        ax1.axhline(y=el, color=C_EC, ls=":",  alpha=0.5, label=f"8월 하순 EC={el:.2f}")
+    if not np.isnan(pe) and not np.isnan(pl):
         ax2.axhline(y=pe, color=C_PH, ls="--", alpha=0.5, label=f"6월 초 pH={pe:.2f}")
-        ax2.axhline(y=pl_, color=C_PH, ls=":",  alpha=0.5, label=f"8월 하순 pH={pl_:.2f}")
+        ax2.axhline(y=pl, color=C_PH, ls=":",  alpha=0.5, label=f"8월 하순 pH={pl:.2f}")
     ax1.set_title("EC · pH 시계열 (재배 기간 전체)")
     ax1.grid(True, alpha=0.3); fig.autofmt_xdate()
-    fig.legend(loc="upper right", bbox_to_anchor=(0.89,0.91), fontsize=8.5, prop=_kp())
+    fig.legend(loc="upper right", bbox_to_anchor=(0.89,0.91), fontsize=8.5)
     plt.tight_layout(); _apply_font_all(fig); st.pyplot(fig); plt.close(fig)
 
 
@@ -557,15 +598,10 @@ def draw_growth_histogram(growth_result):
     fig, ax = plt.subplots(figsize=(8,3.8))
     bins=np.arange(0, fw.max()+1.5, 1.0)
     ax.hist(fw, bins=bins, color=C_FW, alpha=0.75, edgecolor="white", linewidth=1.2)
-    ax.axvline(sd["median"], color="red", ls="--", lw=2,
-               label=f"중앙값 {sd['median']:.2f}g",
-               fontproperties=_kp())
-    ax.axvline(sd["mean"],   color="darkred", ls=":",  lw=2,
-               label=f"평균   {sd['mean']:.2f}g",
-               fontproperties=_kp())
-    ax.set_xlabel("생중량 (g)", fontproperties=_kp())
-    ax.set_ylabel("개체 수", fontproperties=_kp())
-    ax.set_title("생중량(g) 분포 히스토그램 (81개체)", fontproperties=_kp())
+    ax.axvline(sd["median"], color="red", ls="--", lw=2, label=f"중앙값 {sd['median']:.2f}g")
+    ax.axvline(sd["mean"],   color="darkred", ls=":",  lw=2, label=f"평균   {sd['mean']:.2f}g")
+    ax.set_xlabel("생중량 (g)"); ax.set_ylabel("개체 수")
+    ax.set_title("생중량(g) 분포 히스토그램 (81개체)")
     ax.legend(prop=_kp(), fontsize=9); ax.grid(axis="y", alpha=0.3)
     plt.tight_layout(); _apply_font_all(fig); st.pyplot(fig); plt.close(fig)
 
