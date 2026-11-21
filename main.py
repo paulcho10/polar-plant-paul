@@ -12,7 +12,6 @@
   - 한글 폰트 깨짐 방지:
       · matplotlib 폰트 매니저를 try_read_cache=False로 리로드
       · 실제 TTF 파일 경로를 FontProperties(fname=...)로 모든 텍스트에 적용
-      · rcParams["font.family"]도 같은 폰트 이름으로 고정
   - Streamlit Cloud 포함 어떤 환경에서도 그래프 한글 깨지지 않음
 ====================================================================
 """
@@ -27,7 +26,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 from matplotlib.font_manager import FontProperties, FontEntry
-import seaborn as sns
 
 import streamlit as st
 
@@ -40,10 +38,9 @@ from sklearn.metrics import mean_absolute_error, r2_score
 # 0. 한글 폰트 설정 — 그래프 한글 깨짐 완전 방지
 # ─────────────────────────────────────────────────────────────
 
-# 상태 변수 (한 번 찾으면 전체를 통틀어 재사용)
-_KR_FONT_FNAME = None        # 찾은 TTF 파일 전체 경로
-_KR_FONT_FP    = None       # FontProperties(fname=...) 객체
-_KR_FONT_FAMILY = None      # plt.rcParams["font.family"] 에 넣을 폰트 이름
+_KR_FONT_FNAME   = None   # 찾은 TTF 파일 전체 경로
+_KR_FONT_FAMILY  = None   # rcParams["font.family"] 에 넣을 이름
+_KR_FONT_FP      = None   # FontProperties(fname=...) 객체 (전체 재사용)
 
 
 def _setup_korean_font():
@@ -53,7 +50,7 @@ def _setup_korean_font():
     3) 찾은 파일로 fm을 try_read_cache=False로 리로드 → rcParams도 함께 고정
     4) FontProperties(fname=...)를 전역 변수로 저장해 모든 그래프에서 재사용
     """
-    global _KR_FONT_FNAME, _KR_FONT_FP, _KR_FONT_FAMILY
+    global _KR_FONT_FNAME, _KR_FONT_FAMILY, _KR_FONT_FP
 
     # ── 1단계: matplotlib 목록에서 한글 계열 폰트 찾기 ──
     candidates = [
@@ -61,12 +58,12 @@ def _setup_korean_font():
         "Noto Sans CJK KR", "Noto Sans Korean",
         "Malgun Gothic", "AppleGothic", "BaekmuGothic",
     ]
-    found_path = None
-    found_entry = None
+    found_path   = None
+    found_entry  = None
     for name in candidates:
         hits = [f for f in fm.fontManager.ttflist if f.name == name]
         if hits:
-            found_path = hits[0].fname
+            found_path  = hits[0].fname
             found_entry = hits[0]
             break
 
@@ -106,33 +103,29 @@ def _setup_korean_font():
         for f in fm.fontManager.ttflist:
             low = (f.name or "").lower()
             if any(kw in low for kw in ["nanum", "noto", "cjk", "korean", "gothic", "malgun", "apple"]):
-                found_path = f.fname
+                found_path  = f.fname
                 found_entry = f
                 break
 
     # ── 4단계: 찾은 파일로 폰트 매니저 리로드 + rcParams 고정 ──
     if found_path is not None:
-        _KR_FONT_FNAME = found_path
-        # 파일 경로로 직접 FontEntry 생성 → 정확한 family 이름 확보
+        _KR_FONT_FNAME  = found_path
         entry = FontEntry(fname=found_path, name=found_path)
-        # try_read_cache=False로 리로드: 이전에 캐시된 이름/파일 불일치를 방지
-        fm.fontManager = fm.fontManager.__class__(
-            fm.fontManager, reread=True, verify=False)
+        # try_read_cache=False로 리로드: 캐시 불일치 방지
         fm._load_fontmanager(try_read_cache=False)
         fm.fontManager.ttflist.insert(0, entry)
         _KR_FONT_FAMILY = entry.name
-        plt.rcParams["font.family"] = _KR_FONT_FAMILY
-        plt.rcParams["font.sans-serif"] = [_KR_FONT_FAMILY]
+        plt.rcParams["font.family"]       = _KR_FONT_FAMILY
+        plt.rcParams["font.sans-serif"]   = [_KR_FONT_FAMILY]
         plt.rcParams["axes.unicode_minus"] = False
-        # FontProperties 객체를 매번 생성하지 않고 재사용
         _KR_FONT_FP = FontProperties(fname=found_path)
         return True
 
-    # ── 5단계: 한글 폰트 없음 → sans-serif 폴백 (적어도 마이너스 기호는 정상) ──
-    plt.rcParams["font.family"] = "sans-serif"
+    # ── 5단계: 한글 폰트 없음 → sans-serif 폴백 ──
+    plt.rcParams["font.family"]         = "sans-serif"
     plt.rcParams["axes.unicode_minus"] = False
     _KR_FONT_FAMILY = "sans-serif"
-    _KR_FONT_FP = FontProperties()
+    _KR_FONT_FP     = FontProperties()
     return False
 
 
@@ -140,7 +133,7 @@ _setup_korean_font()
 
 
 # ─────────────────────────────────────────────────────────────
-# 폰트 헬퍼 — 모든 그래프 텍스트에 한글 FontProperties 강제 적용
+# 폰트 헬퍼
 # ─────────────────────────────────────────────────────────────
 
 def _kp(size=10, weight="normal"):
@@ -152,17 +145,14 @@ def _kp(size=10, weight="normal"):
 
 def _apply_font_all(fig):
     """그림 전체의 모든 텍스트(제목·축·눈금·범례·ax.text·suptitle)에
-    한글 FontProperties를 적용. twinx(axis) 2개까지 처리."""
+    한글 FontProperties를 적용. 범례가 없을 때는 안전하게 건너뛴다."""
     fp = _kp()
     for ax in fig.get_axes():
-        # 제목 / 축 레이블
+        # 제목
         title = ax.get_title()
         if title:
             ax.set_title(title, fontproperties=fp, fontsize=12)
-        for label_attr in ("xlabel", "ylabel"):
-            lbl = getattr(ax, f"get_{label_attr}")()
-            if lbl:
-                ax.get_xlabel() if label_attr == "xlabel" else ax.get_ylabel()
+        # 축 레이블
         ax.set_xlabel(ax.get_xlabel(), fontproperties=fp)
         ax.set_ylabel(ax.get_ylabel(), fontproperties=fp)
         # 눈금 레이블
@@ -173,9 +163,10 @@ def _apply_font_all(fig):
         # ax.text() 로 그린 모든 텍스트
         for txt in ax.texts:
             txt.set_fontproperties(fp)
-        # 범례
-        if ax.get_legend():
-            ax.get_legend().set_fontproperties(fp)
+        # 범례 — None일 때 오류를 막기 위해 반드시 체크
+        leg = ax.get_legend()
+        if leg is not None:
+            leg.set_fontproperties(fp)
     # Figure suptitle
     stp = fig._suptitle
     if stp is not None:
@@ -222,13 +213,13 @@ def read_csv_flexible(path_or_bytes, is_env=True):
 
 
 _ENV_COL_MAPS = [
-    (["time", "datetime", "날짜", "측정시간", "Timestamp", "시간"],                "time"),
-    (["temperature", "온도", "temp", "기온", "Temperature"],                        "temperature"),
-    (["humidity", "습도", "hum", "HUM", "humidity(%)", "습도(%)"],                  "humidity"),
-    (["ph", "PH", "pH", "수소이온농도", "산도"],                                    "ph"),
-    (["ec", "EC", "전기전도도", "EC(mS/cm)", "ec_mS_cm"],                          "ec"),
-    (["water_temp", "watertemperature", "수온", "water_temp"],                      "water_temp"),
-    (["co2", "CO2", "co2_ppm", "co2(ppm)", "이산화탄소"],                            "co2"),
+    (["time", "datetime", "날짜", "측정시간", "Timestamp", "시간"],     "time"),
+    (["temperature", "온도", "temp", "기온", "Temperature"],            "temperature"),
+    (["humidity", "습도", "hum", "HUM", "humidity(%)", "습도(%)"],      "humidity"),
+    (["ph", "PH", "pH", "수소이온농도", "산도"],                         "ph"),
+    (["ec", "EC", "전기전도도", "EC(mS/cm)", "ec_mS_cm"],              "ec"),
+    (["water_temp", "watertemperature", "수온", "water_temp"],          "water_temp"),
+    (["co2", "CO2", "co2_ppm", "co2(ppm)", "이산화탄소"],                "co2"),
 ]
 
 def _map_env_columns(df):
@@ -250,9 +241,9 @@ def _map_env_columns(df):
 
 
 _GROWTH_COL_MAPS = [
-    (["개체번호", "번호", "id", "개체", "plant_id", "ID", "개체아이디"],    "개체번호"),
-    (["잎 수(장)", "잎수", "잎 수", "leaf_count", "leaf", "잎장수", "잎\n수(장)"],
-     "잎 수(장)"),
+    (["개체번호", "번호", "id", "개체", "plant_id", "ID", "개체아이디"],        "개체번호"),
+    (["잎 수(장)", "잎수", "잎 수", "leaf_count", "leaf", "잎장수",
+      "잎\n수(장)"],                                                         "잎 수(장)"),
     (["지상부 길이(mm)", "지상부길이(mm)", "지상부 길이", "지상부길이",
       "shoot_length", "지상부길이_mm", "지상부 길이(mm)\n", "지상부길이 (mm)"],
      "지상부 길이(mm)"),
@@ -260,11 +251,11 @@ _GROWTH_COL_MAPS = [
       "root_length", "지하부길이_mm", "지하부 길이(mm)\n", "지하부길이 (mm)"],
      "지하부길이(mm)"),
     (["생중량(g)", "생중량", "fresh_weight", "fw", "생체중량(g)",
-      "생중량(g)\n", "생체중량", "생중량 (g)"], "생중량(g)"),
+      "생중량(g)\n", "생체중량", "생중량 (g)"],                              "생중량(g)"),
     (["지상부질량(g)", "지상부질량", "지상부 질량(g)", "shoot_mass",
-      "shoot_weight", "지상부질량(g)\n", "지상부 질량(g)\n"], "지상부질량(g)"),
+      "shoot_weight", "지상부질량(g)\n", "지상부 질량(g)\n"],               "지상부질량(g)"),
     (["지하부질량(g)", "지하부질량", "지하부 질량(g)", "root_mass",
-      "root_weight", "지하부질량(g)\n", "지하부 질량(g)\n"], "지하부질량(g)"),
+      "root_weight", "지하부질량(g)\n", "지하부 질량(g)\n"],               "지하부질량(g)"),
 ]
 
 def _map_growth_columns(df):
@@ -382,19 +373,19 @@ def analyze_env(df):
         start_date = df_t["time_dt"].min()
         eck_date   = start_date + pd.Timedelta(days=10)
         late_date  = median_date + pd.Timedelta(days=20)
-        early_ec = df_t[(df_t["time_dt"]>=start_date) &
-                        (df_t["time_dt"]<=eck_date)]["ec"].dropna()
-        late_ec  = df_t[(df_t["time_dt"]>=late_date-pd.Timedelta(days=10)) &
-                        (df_t["time_dt"]<=late_date+pd.Timedelta(days=10))]["ec"].dropna()
-        early_ph = df_t[(df_t["time_dt"]>=start_date) &
-                        (df_t["time_dt"]<=eck_date)]["ph"].dropna()
-        late_ph  = df_t[(df_t["time_dt"]>=late_date-pd.Timedelta(days=10)) &
-                        (df_t["time_dt"]<=late_date+pd.Timedelta(days=10))]["ph"].dropna()
+        early_ec = df_t[(df_t["time_dt"] >= start_date) &
+                        (df_t["time_dt"] <= eck_date)]["ec"].dropna()
+        late_ec  = df_t[(df_t["time_dt"] >= late_date - pd.Timedelta(days=10)) &
+                        (df_t["time_dt"] <= late_date + pd.Timedelta(days=10))]["ec"].dropna()
+        early_ph = df_t[(df_t["time_dt"] >= start_date) &
+                        (df_t["time_dt"] <= eck_date)]["ph"].dropna()
+        late_ph  = df_t[(df_t["time_dt"] >= late_date - pd.Timedelta(days=10)) &
+                        (df_t["time_dt"] <= late_date + pd.Timedelta(days=10))]["ph"].dropna()
         out["early_ec_mean"] = float(early_ec.mean()) if len(early_ec) > 0 else np.nan
         out["late_ec_mean"]  = float(late_ec.mean())  if len(late_ec)  > 0 else np.nan
         out["early_ph_mean"] = float(early_ph.mean()) if len(early_ph)  > 0 else np.nan
         out["late_ph_mean"]  = float(late_ph.mean())  if len(late_ph)  > 0 else np.nan
-        if not np.isnan(out["early_ec_mean"]) and out["early_ec_mean"] != 0:
+        if (not np.isnan(out["early_ec_mean"]) and out["early_ec_mean"] != 0):
             out["ec_change_pct"] = (out["late_ec_mean"] - out["early_ec_mean"]) / out["early_ec_mean"] * 100
         if (not np.isnan(out["early_ph_mean"]) and not np.isnan(out["late_ph_mean"])):
             out["ph_change_abs"] = out["late_ph_mean"] - out["early_ph_mean"]
@@ -436,7 +427,7 @@ def analyze_growth(df):
     out["n_growth"] = n
 
     col_map = {
-        "잎 수(장)":        "leaf",
+        "잎 수(장)":       "leaf",
         "지상부 길이(mm)": "shoot",
         "지하부길이(mm)":  "root",
         "생중량(g)":       "fw",
@@ -449,17 +440,17 @@ def analyze_growth(df):
         s = s.dropna()
         if len(s) == 0:
             return {}
-        mean_v  = float(s.mean())
-        median_v= float(s.median())
-        std_v   = float(s.std(ddof=1))
-        var_v   = float(s.var(ddof=1))
-        cv_v    = float(std_v / mean_v * 100) if mean_v != 0 else float("nan")
-        mn_v    = float(s.min())
-        mx_v    = float(s.max())
-        q1_v    = float(s.quantile(0.25))
-        q3_v    = float(s.quantile(0.75))
-        iqr_v   = q3_v - q1_v
-        ratio   = mx_v / mn_v if mn_v != 0 else float("nan")
+        mean_v   = float(s.mean())
+        median_v = float(s.median())
+        std_v    = float(s.std(ddof=1))
+        var_v    = float(s.var(ddof=1))
+        cv_v     = float(std_v / mean_v * 100) if mean_v != 0 else float("nan")
+        mn_v     = float(s.min())
+        mx_v     = float(s.max())
+        q1_v     = float(s.quantile(0.25))
+        q3_v     = float(s.quantile(0.75))
+        iqr_v    = q3_v - q1_v
+        ratio    = mx_v / mn_v if mn_v != 0 else float("nan")
         return {"mean": mean_v, "median": median_v, "std": std_v, "var": var_v,
                 "cv": cv_v, "min": mn_v, "max": mx_v, "q1": q1_v, "q3": q3_v,
                 "iqr": iqr_v, "max_min_ratio": ratio, "n": len(s),
@@ -598,9 +589,9 @@ def analyze_growth(df):
         pred2 = model2.predict(X2)
         r2_2  = float(r2_score(fw_arr, pred2))
         mae_2 = float(mean_absolute_error(fw_arr, pred2))
-        coef2_leaf  = float(model2.coef_[0])
-        coef2_shoot = float(model2.coef_[1])
-        int2    = float(model2.intercept_)
+        coef2_leaf   = float(model2.coef_[0])
+        coef2_shoot  = float(model2.coef_[1])
+        int2         = float(model2.intercept_)
         cv2 = KFold(n_splits=5, shuffle=True, random_state=42)
         cv_r2_2  = cross_val_score(model2, X2, fw_arr, cv=cv2, scoring="r2")
         cv_mae_2 = cross_val_score(model2, X2, fw_arr, cv=cv2,
@@ -719,7 +710,7 @@ def draw_ec_ph_trend(env_result, env_df):
     ec_late  = env_result.get("late_ec_mean")
     ph_early = env_result.get("early_ph_mean")
     ph_late  = env_result.get("late_ph_mean")
-    if not np.isnan(ec_early) and not np.isnan(ec_late):
+    if (not np.isnan(ec_early) and not np.isnan(ec_late)):
         ax1.axhline(y=ec_early, color=C_EC, ls="--", alpha=0.5,
                     label=f"6월 초 EC={ec_early:.2f}")
         ax1.axhline(y=ec_late,  color=C_EC, ls=":",  alpha=0.5,
@@ -1001,7 +992,9 @@ def main():
 
             st.markdown("---")
             st.subheader("2. 날짜별 평균 온도·습도 시계열 (그래프 1)")
-            st.caption("2026년 6월 16일 ~ 10월 21일 (127일간) 일평균 온도와 습도. 온도는 여름철(7~8월)에 25~28°C까지 올라가고 가을로 가며 서서히 내려가요. 습도는 60~70% 구간을 대체로 유지하며 8월 하순~9월 초에 약간 낮아져요.")
+            st.caption("2026년 6월 16일 ~ 10월 21일 (127일간) 일평균 온도와 습도. "
+                        "온도는 여름철(7~8월)에 25~28°C까지 올라가고 가을로 가며 서서히 내려가요. "
+                        "습도는 60~70% 구간을 대체로 유지하며 8월 하순~9월 초에 약간 낮아져요.")
             draw_env_timeseries(env_result, env_df)
 
             st.markdown("---")
@@ -1026,11 +1019,12 @@ def main():
                 st.caption(
                     f"측정 시점 중간 기준일: **{md.strftime('%Y-%m-%d')}**  "
                     f"(전반부: ~{md.strftime('%m/%d')} / 후반부: {md.strftime('%m/%d')}~)")
-            st.caption("전반부(여름)와 후반부(가을)의 평균·분산을 비교하면 계절 변화가 환경에 어떤 영향을 줬는지 볼 수 있어요.")
-            ft  = env_result["first_temp"];  ft2 = env_result["second_temp"]
-            fh  = env_result["first_humi"];  fh2 = env_result["second_humi"]
-            fe  = env_result["first_ec"];    fe2 = env_result["second_ec"]
-            fp_ = env_result["first_ph"];    fp2_ = env_result["second_ph"]
+            st.caption("전반부(여름)와 후반부(가을)의 평균·분산을 비교하면 "
+                        "계절 변화가 환경에 어떤 영향을 줬는지 볼 수 있어요.")
+            ft   = env_result["first_temp"];  ft2  = env_result["second_temp"]
+            fh   = env_result["first_humi"];  fh2  = env_result["second_humi"]
+            fe   = env_result["first_ec"];    fe2  = env_result["second_ec"]
+            fp_  = env_result["first_ph"];    fp2_ = env_result["second_ph"]
 
             def safe_div(a, b):
                 return a / b if b != 0 else np.nan
@@ -1056,17 +1050,21 @@ def main():
                     ],
                 }),
                 use_container_width=True, hide_index=True)
-            st.caption("- 온도: 후반부 평균이 0.95°C 낮고, 분산은 2.079배로 커졌어요. 계절이 가을로 넘어가면서 온도가 내려가고 변동도 커진 흔적이에요.")
-            st.caption("- 습도: 평균과 분산 모두 거의 변하지 않아, 습도 환경은 재배 기간 내내 비교적 일정했어요.")
-            st.caption("- EC: 후반부로 갈수록 평균 0.33 상승, 분산도 1.404배 증가. EC가 점점 높아지는 방향이 분명해요.")
-            st.caption("- pH: 후반부 평균이 0.69 낮고 분산은 오히려 0.445배로 줄었어요. pH는 알칼리성에서 약산성으로 이동했어요.")
+            st.caption("- 온도: 후반부 평균이 0.95°C 낮고, 분산은 2.079배로 커졌어요. "
+                        "계절이 가을로 넘어가면서 온도가 내려가고 변동도 커진 흔적이에요.")
+            st.caption("- 습도: 평균과 분산 모두 거의 변하지 않아, "
+                        "습도 환경은 재배 기간 내내 비교적 일정했어요.")
+            st.caption("- EC: 후반부로 갈수록 평균 0.33 상승, 분산도 1.404배 증가. "
+                        "EC가 점점 높아지는 방향이 분명해요.")
+            st.caption("- pH: 후반부 평균이 0.69 낮고 분산은 오히려 0.445배로 줄었어요. "
+                        "pH는 알칼리성에서 약산성으로 이동했어요.")
 
             st.markdown("---")
             st.subheader("5. EC · pH 변화 (6월 초 vs 8월 하순)")
-            ec_e = env_result.get("early_ec_mean")
-            ec_l = env_result.get("late_ec_mean")
-            ph_e = env_result.get("early_ph_mean")
-            ph_l = env_result.get("late_ph_mean")
+            ec_e   = env_result.get("early_ec_mean")
+            ec_l   = env_result.get("late_ec_mean")
+            ph_e   = env_result.get("early_ph_mean")
+            ph_l   = env_result.get("late_ph_mean")
             ec_chg = env_result.get("ec_change_pct")
             ph_chg = env_result.get("ph_change_abs")
             cA, cB = st.columns(2)
@@ -1093,8 +1091,8 @@ def main():
 
             st.markdown("---")
             st.subheader("7. 이상치 확인 (IQR 기준)")
-            st.caption("IQR(사분위범위) = Q3 − Q1.  Q1 − 1.5×IQR보다 작거나 "
-                        "Q3 + 1.5×IQR보다 큰 값을 이상치로 봐요.")
+            st.caption("IQR(사분위범위) = Q3 − Q1.  "
+                        "Q1 − 1.5×IQR보다 작거나 Q3 + 1.5×IQR보다 큰 값을 이상치로 봐요.")
             for label, key in [("온도", "temp_out"), ("습도", "humi_out")]:
                 o = env_result[key]
                 st.write(f"**{label} 이상치**: {o['count']}개")
@@ -1139,13 +1137,15 @@ def main():
                 }),
                 use_container_width=True, hide_index=True)
             st.caption("📌 생중량 CV 89.42%, 최대/최소 배율 250.25배 — 네 항목 중 개체 간 차이가 가장 커요.")
-            st.caption("📌 중앙값(1.76g) < 평균(2.48g) → 일부 무거운 개체가 평균을 끌어올리는 오른쪽 꼬리 분포예요.")
+            st.caption("📌 중앙값(1.76g) < 평균(2.48g) → 일부 무거운 개체가 평균을 끌어올리는 "
+                        "오른쪽 꼬리 분포예요.")
 
             st.markdown("---")
             st.subheader("3. 생중량 분포 히스토그램 (그래프 4)")
             st.caption("81개체 생중량을 1g 간격 구간으로 나눈 히스토그램. "
                         "0~2g 구간에 가장 많은 개체가 몰려 있고, 3g 이상은 급격히 줄어들어요. "
-                        "붉은 점선은 중앙값 1.76g. 분포가 왼쪽에 몰리고 오른쪽으로 꼬리가 긴 비대칭 모양이에요.")
+                        "붉은 점선은 중앙값 1.76g. 분포가 왼쪽에 몰리고 오른쪽으로 꼬리가 긴 "
+                        "비대칭 모양이에요.")
             draw_growth_histogram(grow_result)
 
             st.markdown("---")
@@ -1230,19 +1230,21 @@ def main():
             rows = []
             for label, key in items_k:
                 pv = g[f"p_{key}"]
-                sig_label = ("유의함 (p<0.001)" if (not np.isnan(pv) and pv < 0.001)
-                             else ("유의함 (p<0.05)" if (not np.isnan(pv) and pv < 0.05)
-                                   else "유의하지 않음"))
+                sig_label = (
+                    "유의함 (p<0.001)" if (not np.isnan(pv) and pv < 0.001)
+                    else ("유의함 (p<0.05)" if (not np.isnan(pv) and pv < 0.05)
+                          else "유의하지 않음")
+                )
                 rows.append({
-                    "항목":               label,
-                    "Top 25% 평균":      round(g[f"top_{key}_mean"], 2),
-                    "Bottom 25% 평균":   round(g[f"bot_{key}_mean"], 2),
-                    "평균 차이":         round(g[f"diff_{key}"], 2),
-                    "Top/Bottom 비율":   round(g[f"ratio_{key}"], 2),
-                    "Top SD":            round(g[f"top_{key}_std"], 2),
-                    "Bottom SD":         round(g[f"bot_{key}_std"], 2),
-                    "p값":               fmt_pval(pv),
-                    "유의성":            sig_label,
+                    "항목":              label,
+                    "Top 25% 평균":     round(g[f"top_{key}_mean"], 2),
+                    "Bottom 25% 평균":  round(g[f"bot_{key}_mean"], 2),
+                    "평균 차이":        round(g[f"diff_{key}"], 2),
+                    "Top/Bottom 비율":  round(g[f"ratio_{key}"], 2),
+                    "Top SD":           round(g[f"top_{key}_std"], 2),
+                    "Bottom SD":        round(g[f"bot_{key}_std"], 2),
+                    "p값":              fmt_pval(pv),
+                    "유의성":           sig_label,
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             st.caption("가장 통계적으로 유의한(p가 가장 작은) 차이는 **잎 수** "
