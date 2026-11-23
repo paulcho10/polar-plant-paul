@@ -207,7 +207,7 @@ def scatter_fig(d, xcols, ycol, title):
                                          showlegend=(i == 1), marker=dict(color=color, size=8, opacity=0.8)),
                               row=1, col=i)
         else:
-            fig.add_trace(go.Scatter(x=sub[x], y=sub[ycol], mode="markers", name="개체", showlegend=(i == 1),
+            fig.add_trace(go.Scatter(x=sub[x], y=s2[ycol], mode="markers", name="개체", showlegend=(i == 1),
                                      marker=dict(color=C_MID, size=8)), row=1, col=i)
         if len(sub) >= 3 and sub[x].nunique() > 1:
             a, b = np.polyfit(sub[x], sub[ycol], 1)
@@ -228,7 +228,7 @@ def make_groups(gd):
     d["잎 수"] = pd.to_numeric(d["잎 수"], errors="coerce")
     d["생중량"] = pd.to_numeric(d["생중량"], errors="coerce")
     d = d.dropna(subset=["잎 수", "생중량"]).reset_index(drop=True)
-    d["잎당 생중량"] = (d["생중량"] / d["잎 수"].where(d["잎 수"] > 0)).round(4)  # 잎 한 장이 평균 몇 g인가
+    d["잎당 생중량"] = (d["생중량"] / d["잎 수"].where(d["잎 수"] > 0)).round(4)
     n = len(d)
     if n < 8:
         return None
@@ -328,12 +328,12 @@ avail = [c for c in ALL_ITEMS if growth_df is not None and c in growth_df.column
 st.sidebar.markdown("---")
 sel = st.sidebar.multiselect("생육 측정 항목 선택", avail,
                              default=[c for c in ["잎 수", "지상부 길이", "지하부 길이", "생중량"] if c in avail])
-for c in ("잎 수", "생중량"):  # 가설에 꼭 필요한 두 항목은 항상 포함
+for c in ("잎 수", "생중량"):
     if c in avail and c not in sel:
         sel.append(c)
 school = school_name(env_file, growth_file)
 
-st.title("송도고 극지식물 개체별 생육 차이 분석 대시보드")
+st.title("송도고 그린 2팀-조성현,정구준,임상원,한유찬-송도고 극지식물 개체별 생육 차이 분석 대시보드")
 st.success("📌 **연구 가설** : 잎 수 상위 25% 개체는 하위 25%보다 생중량이 클 것이다.")
 st.caption(f"🏫 {school} · 같은 스마트팜에서 자란 극지식물 개체끼리 비교 · 위 가설을 데이터로 검증합니다")
 if env_file is None and growth_file is None:
@@ -366,7 +366,6 @@ def tab_problem():
 | ④ 가설 검정 | 잎 수 상위 25% vs 하위 25%의 생중량 비교 | 가설을 **직접** 시험하는 단계예요. 차이가 우연인지 검정으로 판단해요. |
 | ⑤ 예측 | 잎 수로 생중량을 예측하는 직선 | 차이가 '얼마나' 큰지, 실제로 쓸 만한지 숫자로 보여줘요. |
 """)
-
 
 
 def tab_method():
@@ -531,7 +530,7 @@ def growth_section(gd, kr):
                 "**생중량 줄**에서 빨간 칸이 가장 진한 항목이 생중량과 가장 밀접해요. 잎 수 칸이 진하면 가설의 출발점이 맞아요."])
 
     st.subheader("3.3 잎 수와 다른 값의 관계 (전체 개체로 먼저 보기)")
-    why("가설은 상·하위 극단만 비교해요. 전체 81개체 같은 중간 개체까지 '잎 수가 늘 때 생중량도 느는지' 보면 가설의 방향이 우연이 아닌지 한 번 더 확인할 수 있어요.")
+    why("가설은 상·하위 극단만 비교해요. 전체 개체 같은 중간 개체까지 '잎 수가 늘 때 생중량도 느는지' 보면 가설의 방향이 우연이 아닌지 한 번 더 확인할 수 있어요.")
     if kr is None:
         st.info("잎 수·생중량 열이 있어야 산점도를 그릴 수 있어요.")
         return
